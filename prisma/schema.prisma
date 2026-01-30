@@ -1,0 +1,773 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE SCHEMA - Customers & Accounts
+// ============================================
+
+enum CustomerType {
+  individual
+  corporate
+}
+
+enum RiskCategory {
+  low
+  medium
+  high
+}
+
+enum KYCStatus {
+  pending
+  verified
+  expired
+  rejected
+}
+
+model Customer {
+  id              String       @id @default(cuid())
+  customerId      String       @unique @default(cuid())
+  type            CustomerType
+
+  // Individual fields
+  firstName       String?
+  lastName        String?
+  dateOfBirth     DateTime?
+
+  // Corporate fields
+  companyName     String?
+  cin             String?
+
+  // Common fields
+  email           String       @unique
+  phone           String
+  pan             String?
+  aadhaar         String?
+  address         String
+  city            String?
+  state           String?
+  pincode         String?
+
+  riskCategory    RiskCategory @default(low)
+  kycStatus       KYCStatus    @default(pending)
+  isActive        Boolean      @default(true)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  accounts        Account[]
+  loans           Loan[]
+  loanApplications LoanApplication[]
+  cards           Card[]
+  kycDocuments    KYCDocument[]
+  beneficiaries   Beneficiary[]
+  collectionActivities CollectionActivity[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([pan])
+}
+
+enum AccountType {
+  savings
+  current
+  fd
+  rd
+  escrow
+}
+
+enum AccountStatus {
+  active
+  dormant
+  frozen
+  closed
+}
+
+model Account {
+  id              String        @id @default(cuid())
+  accountNumber   String        @unique
+  customerId      String
+  type            AccountType
+
+  balance         Decimal       @default(0) @db.Decimal(18, 2)
+  availableBalance Decimal      @default(0) @db.Decimal(18, 2)
+  currency        String        @default("INR")
+
+  branch          String
+  ifscCode        String?
+
+  interestRate    Decimal?      @db.Decimal(5, 2)
+  tenureMonths    Int?
+  maturityDate    DateTime?
+
+  nominationName  String?
+  nominationRelation String?
+
+  status          AccountStatus @default(active)
+  openedAt        DateTime      @default(now())
+  closedAt        DateTime?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  transactionsFrom Transaction[] @relation("FromAccount")
+  transactionsTo  Transaction[] @relation("ToAccount")
+  cards           Card[]
+
+  @@index([customerId])
+  @@index([accountNumber])
+}
+
+model KYCDocument {
+  id              String    @id @default(cuid())
+  customerId      String
+  documentType    String
+  documentNumber  String
+  documentUrl     String?
+  isVerified      Boolean   @default(false)
+  verifiedAt      DateTime?
+  verifiedBy      String?
+  expiryDate      DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer        Customer  @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+model Beneficiary {
+  id              String    @id @default(cuid())
+  customerId      String
+  nickname        String
+  accountNumber   String
+  accountHolderName String
+  bankName        String
+  ifscCode        String
+  accountType     String    @default("savings")
+  transferLimit   Decimal?  @db.Decimal(18, 2)
+  isActive        Boolean   @default(true)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer        Customer  @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+// ============================================
+// TRANSACTIONS SCHEMA
+// ============================================
+
+enum TransactionType {
+  credit
+  debit
+}
+
+enum TransactionStatus {
+  pending
+  completed
+  failed
+  reversed
+}
+
+enum PaymentMode {
+  internal
+  neft
+  rtgs
+  imps
+  upi
+  cash
+  cheque
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  transactionId   String            @unique @default(cuid())
+
+  fromAccountId   String?
+  toAccountId     String?
+
+  type            TransactionType
+  amount          Decimal           @db.Decimal(18, 2)
+  currency        String            @default("INR")
+
+  mode            PaymentMode
+  status          TransactionStatus @default(pending)
+
+  description     String?
+  reference       String?
+
+  beneficiaryName String?
+  beneficiaryAccount String?
+  beneficiaryBank String?
+  beneficiaryIfsc String?
+  upiId           String?
+
+  balanceAfter    Decimal?          @db.Decimal(18, 2)
+
+  processedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  fromAccount     Account?          @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount       Account?          @relation("ToAccount", fields: [toAccountId], references: [id])
+  glEntries       GLEntry[]
+
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@index([transactionId])
+  @@index([createdAt])
+}
+
+// ============================================
+// LENDING SCHEMA
+// ============================================
+
+enum LoanType {
+  personal
+  home
+  auto
+  business
+  education
+  gold
+}
+
+enum LoanStatus {
+  active
+  closed
+  npa
+  written_off
+  restructured
+}
+
+model Loan {
+  id              String      @id @default(cuid())
+  loanNumber      String      @unique
+  customerId      String
+
+  type            LoanType
+  principalAmount Decimal     @db.Decimal(18, 2)
+  outstandingAmount Decimal   @db.Decimal(18, 2)
+  interestRate    Decimal     @db.Decimal(5, 2)
+  tenureMonths    Int
+
+  emiAmount       Decimal     @db.Decimal(18, 2)
+  emiDate         Int
+
+  disbursementDate DateTime
+  maturityDate    DateTime
+
+  status          LoanStatus  @default(active)
+  daysOverdue     Int         @default(0)
+
+  collateralType  String?
+  collateralValue Decimal?    @db.Decimal(18, 2)
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  customer        Customer    @relation(fields: [customerId], references: [id])
+  application     LoanApplication?
+  collectionActivities CollectionActivity[]
+
+  @@index([customerId])
+  @@index([loanNumber])
+  @@index([status])
+}
+
+enum ApplicationStatus {
+  draft
+  submitted
+  under_review
+  approved
+  rejected
+  disbursed
+  cancelled
+}
+
+model LoanApplication {
+  id              String            @id @default(cuid())
+  applicationNumber String          @unique
+  customerId      String
+
+  loanType        LoanType
+  requestedAmount Decimal           @db.Decimal(18, 2)
+  approvedAmount  Decimal?          @db.Decimal(18, 2)
+  tenure          Int
+
+  purpose         String
+  employmentType  String
+  monthlyIncome   Decimal           @db.Decimal(18, 2)
+  existingEMI     Decimal           @default(0) @db.Decimal(18, 2)
+
+  status          ApplicationStatus @default(draft)
+
+  creditScore     Int?
+  debtToIncomeRatio Decimal?        @db.Decimal(5, 2)
+
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  approvedAt      DateTime?
+  approvedBy      String?
+  rejectionReason String?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  customer        Customer          @relation(fields: [customerId], references: [id])
+  loan            Loan?             @relation(fields: [loanId], references: [id])
+  loanId          String?           @unique
+
+  @@index([customerId])
+  @@index([status])
+}
+
+enum ActivityType {
+  call
+  visit
+  email
+  sms
+  notice
+  legal
+}
+
+enum ActivityOutcome {
+  contacted
+  not_reachable
+  promise_to_pay
+  dispute
+  skip
+  legal_action
+}
+
+model CollectionActivity {
+  id              String          @id @default(cuid())
+  loanId          String
+  customerId      String
+
+  activityType    ActivityType
+  activityDate    DateTime
+  outcome         ActivityOutcome
+
+  promiseDate     DateTime?
+  promiseAmount   Decimal?        @db.Decimal(18, 2)
+
+  notes           String?
+  collectorId     String
+  collectorName   String
+  nextFollowUp    DateTime?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  loan            Loan            @relation(fields: [loanId], references: [id])
+  customer        Customer        @relation(fields: [customerId], references: [id])
+
+  @@index([loanId])
+  @@index([customerId])
+}
+
+// ============================================
+// CARDS SCHEMA
+// ============================================
+
+enum CardType {
+  debit
+  credit
+  prepaid
+}
+
+enum CardStatus {
+  active
+  blocked
+  expired
+  cancelled
+}
+
+model Card {
+  id              String      @id @default(cuid())
+  cardNumber      String      @unique
+  maskedNumber    String
+
+  customerId      String
+  accountId       String?
+
+  type            CardType
+  variant         String
+
+  nameOnCard      String
+  expiryDate      DateTime
+  cvv             String
+  pin             String?
+
+  dailyLimit      Decimal     @db.Decimal(18, 2)
+  monthlyLimit    Decimal     @db.Decimal(18, 2)
+
+  status          CardStatus  @default(active)
+  isInternational Boolean     @default(false)
+  isOnline        Boolean     @default(true)
+
+  issuedAt        DateTime    @default(now())
+  lastUsed        DateTime?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  customer        Customer    @relation(fields: [customerId], references: [id])
+  account         Account?    @relation(fields: [accountId], references: [id])
+  disputes        CardDispute[]
+
+  @@index([customerId])
+  @@index([cardNumber])
+}
+
+enum DisputeStatus {
+  open
+  under_investigation
+  resolved
+  rejected
+  escalated
+}
+
+model CardDispute {
+  id              String        @id @default(cuid())
+  disputeNumber   String        @unique
+  cardId          String
+
+  disputeType     String
+  transactionDate DateTime
+  transactionAmount Decimal     @db.Decimal(18, 2)
+  merchantName    String?
+
+  description     String
+  status          DisputeStatus @default(open)
+
+  resolution      String?
+  refundAmount    Decimal?      @db.Decimal(18, 2)
+
+  assignedTo      String?
+  resolvedAt      DateTime?
+  resolvedBy      String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  card            Card          @relation(fields: [cardId], references: [id])
+
+  @@index([cardId])
+  @@index([status])
+}
+
+// ============================================
+// ACCOUNTING SCHEMA
+// ============================================
+
+enum GLEntryType {
+  debit
+  credit
+}
+
+enum PostingStatus {
+  pending
+  posted
+  reversed
+}
+
+model GLEntry {
+  id              String        @id @default(cuid())
+  entryNumber     String        @unique
+
+  accountCode     String
+  accountName     String
+
+  type            GLEntryType
+  amount          Decimal       @db.Decimal(18, 2)
+
+  description     String
+  transactionRef  String?
+  transactionId   String?
+
+  postingDate     DateTime
+  postingStatus   PostingStatus @default(pending)
+
+  postedBy        String?
+  postedAt        DateTime?
+  reversedBy      String?
+  reversedAt      DateTime?
+  reversalReason  String?
+
+  branch          String
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  transaction     Transaction?  @relation(fields: [transactionId], references: [id])
+
+  @@index([accountCode])
+  @@index([postingDate])
+  @@index([postingStatus])
+}
+
+enum ReconciliationStatus {
+  matched
+  unmatched
+  exception
+  resolved
+}
+
+model ReconciliationItem {
+  id              String               @id @default(cuid())
+
+  internalRef     String
+  internalAmount  Decimal              @db.Decimal(18, 2)
+  internalDate    DateTime
+
+  externalRef     String?
+  externalAmount  Decimal?             @db.Decimal(18, 2)
+  externalDate    DateTime?
+
+  difference      Decimal?             @db.Decimal(18, 2)
+  status          ReconciliationStatus @default(unmatched)
+
+  source          String
+  notes           String?
+
+  matchedAt       DateTime?
+  matchedBy       String?
+
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([status])
+  @@index([source])
+}
+
+// ============================================
+// ADMIN SCHEMA
+// ============================================
+
+enum UserRole {
+  admin
+  manager
+  officer
+  teller
+  viewer
+}
+
+enum UserStatus {
+  active
+  inactive
+  locked
+}
+
+model User {
+  id              String      @id @default(cuid())
+  employeeId      String      @unique
+
+  name            String
+  email           String      @unique
+  password        String
+
+  role            UserRole    @default(officer)
+  branch          String
+  department      String
+
+  status          UserStatus  @default(active)
+
+  lastLogin       DateTime?
+  loginAttempts   Int         @default(0)
+  lockedUntil     DateTime?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  auditLogs       AuditLog[]
+  workflows       Workflow[]  @relation("AssignedWorkflows")
+  createdWorkflows Workflow[] @relation("CreatedWorkflows")
+
+  @@index([email])
+  @@index([employeeId])
+}
+
+model Branch {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  name            String
+
+  address         String
+  city            String
+  state           String
+  pincode         String
+
+  phone           String
+  email           String?
+  ifscCode        String    @unique
+
+  managerId       String?
+  isActive        Boolean   @default(true)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([code])
+  @@index([ifscCode])
+}
+
+model Product {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  name            String
+  type            String
+
+  description     String
+
+  interestRate    Decimal?  @db.Decimal(5, 2)
+  minBalance      Decimal?  @db.Decimal(18, 2)
+  maxBalance      Decimal?  @db.Decimal(18, 2)
+
+  tenureMin       Int?
+  tenureMax       Int?
+
+  features        Json?
+  eligibility     Json?
+
+  isActive        Boolean   @default(true)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([type])
+  @@index([isActive])
+}
+
+// ============================================
+// WORKFLOW & AUDIT
+// ============================================
+
+enum WorkflowType {
+  account_opening
+  loan_approval
+  kyc_verification
+  card_issuance
+  limit_change
+  account_closure
+}
+
+enum WorkflowStatus {
+  pending
+  in_progress
+  approved
+  rejected
+  completed
+}
+
+model Workflow {
+  id              String          @id @default(cuid())
+  workflowNumber  String          @unique
+
+  type            WorkflowType
+  entityType      String
+  entityId        String
+
+  status          WorkflowStatus  @default(pending)
+  priority        String          @default("normal")
+
+  currentStep     Int             @default(1)
+  totalSteps      Int             @default(1)
+
+  data            Json?
+
+  assignedToId    String?
+  createdById     String
+
+  dueDate         DateTime?
+  completedAt     DateTime?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  assignedTo      User?           @relation("AssignedWorkflows", fields: [assignedToId], references: [id])
+  createdBy       User            @relation("CreatedWorkflows", fields: [createdById], references: [id])
+
+  @@index([status])
+  @@index([type])
+  @@index([assignedToId])
+}
+
+enum AuditAction {
+  create
+  read
+  update
+  delete
+  login
+  logout
+  approve
+  reject
+}
+
+model AuditLog {
+  id              String      @id @default(cuid())
+
+  userId          String
+  userName        String
+
+  action          AuditAction
+  entity          String
+  entityId        String
+  entityName      String?
+
+  oldValues       Json?
+  newValues       Json?
+
+  ipAddress       String?
+  userAgent       String?
+
+  status          String      @default("success")
+  errorMessage    String?
+
+  timestamp       DateTime    @default(now())
+
+  user            User        @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity])
+  @@index([timestamp])
+}
+
+model Alert {
+  id              String    @id @default(cuid())
+
+  type            String
+  severity        String
+
+  title           String
+  message         String
+
+  entityType      String?
+  entityId        String?
+
+  isRead          Boolean   @default(false)
+  isResolved      Boolean   @default(false)
+
+  assignedTo      String?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  resolution      String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([type])
+  @@index([severity])
+  @@index([isRead])
+}
